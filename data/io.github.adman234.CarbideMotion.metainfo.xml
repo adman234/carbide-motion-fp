@@ -20,5 +20,6 @@
   <content_rating type="oars-1.1"/>
   <releases>
     <!-- managed by scripts/check_update.py -->
+    <release version="622" date="2026-10-09"/>
   </releases>
 </component>
