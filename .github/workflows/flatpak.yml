@@ -1,0 +1,204 @@
+name: Carbide Motion Flatpak
+
+on:
+  schedule:
+    - cron: '23 7 * * *'   # daily check for a new Carbide Motion build
+  push:
+    branches: [main]
+    paths-ignore: ['README.md']
+  workflow_dispatch:
+    inputs:
+      installer_url:
+        description: 'Pin this Carbide Motion Windows installer URL (leave blank to auto-detect)'
+        required: false
+      channel:
+        description: 'Release channel to track when auto-detecting'
+        type: choice
+        options: [stable, beta]
+        default: stable
+      force_build:
+        description: 'Rebuild and republish even if nothing changed'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: flatpak-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APP_ID: io.github.adman234.CarbideMotion
+  FLATPAK_BRANCH: stable
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      version: ${{ steps.update.outputs.version }}
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check carbide3d.com for a new Windows build
+        id: update
+        env:
+          CM_CHANNEL: ${{ inputs.channel || vars.CM_CHANNEL || 'stable' }}
+          INSTALLER_URL: ${{ inputs.installer_url }}
+        run: |
+          if [ -n "$INSTALLER_URL" ]; then
+            python3 scripts/check_update.py --url "$INSTALLER_URL"
+          else
+            python3 scripts/check_update.py
+          fi
+
+      - name: Commit new pin
+        id: commit
+        run: |
+          if [ "${{ steps.update.outputs.changed }}" = "true" ] && ! git diff --quiet; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "Update Carbide Motion to ${{ steps.update.outputs.version }}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to build
+        id: decide
+        run: |
+          if [ "${{ steps.update.outputs.changed }}" = "true" ] \
+             || [ "${{ github.event_name }}" = "push" ] \
+             || [ "${{ inputs.force_build }}" = "true" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+
+      - name: Install flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          # Ubuntu 24.04 blocks the unprivileged user namespaces bubblewrap needs.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - name: Import signing key
+        id: gpg
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+        run: |
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "No FLATPAK_GPG_PRIVATE_KEY secret; publishing an unsigned repo."
+            exit 0
+          fi
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -p -m 700 "$GNUPGHOME"
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/{print $5; exit}')
+          echo "args=--gpg-sign=$KEYID --gpg-homedir=$GNUPGHOME" >> "$GITHUB_OUTPUT"
+          echo "pubkey=$(gpg --export "$KEYID" | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: .flatpak-builder
+          key: flatpak-builder-${{ hashFiles('*.yml') }}
+          restore-keys: flatpak-builder-
+
+      - name: Build
+        run: |
+          flatpak-builder --user --install-deps-from=flathub --force-clean \
+            --default-branch="$FLATPAK_BRANCH" \
+            --repo=site/repo ${{ steps.gpg.outputs.args }} \
+            build-dir "$APP_ID.yml"
+          flatpak build-update-repo --generate-static-deltas --prune \
+            --title="Carbide Motion (unofficial)" \
+            ${{ steps.gpg.outputs.args }} site/repo
+
+      - name: Create single-file bundle
+        run: |
+          flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
+            ${{ steps.gpg.outputs.args }} \
+            site/repo "CarbideMotion-${{ needs.check.outputs.version }}.flatpak" "$APP_ID" "$FLATPAK_BRANCH"
+
+      - name: Smoke test install (downloads + verifies the official installer)
+        run: |
+          flatpak install --user --noninteractive --assumeyes \
+            "CarbideMotion-${{ needs.check.outputs.version }}.flatpak"
+          flatpak info --user "$APP_ID"
+          test -s "$(flatpak info --user --show-location "$APP_ID")/files/extra/CarbideMotionSetup.exe"
+
+      - name: Write remote descriptors
+        env:
+          PUBKEY: ${{ steps.gpg.outputs.pubkey }}
+        run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          NAME="${GITHUB_REPOSITORY#*/}"
+          BASE="https://${OWNER}.github.io/${NAME}"
+          {
+            echo "[Flatpak Repo]"
+            echo "Title=Carbide Motion (unofficial)"
+            echo "Url=${BASE}/repo/"
+            echo "Homepage=https://github.com/${GITHUB_REPOSITORY}"
+            [ -n "$PUBKEY" ] && echo "GPGKey=${PUBKEY}"
+          } > site/carbide-motion.flatpakrepo
+          {
+            echo "[Flatpak Ref]"
+            echo "Name=${APP_ID}"
+            echo "Branch=${FLATPAK_BRANCH}"
+            echo "Title=Carbide Motion (unofficial)"
+            echo "Url=${BASE}/repo/"
+            echo "SuggestRemoteName=carbide-motion"
+            echo "RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo"
+            echo "IsRuntime=false"
+            [ -n "$PUBKEY" ] && echo "GPGKey=${PUBKEY}"
+          } > site/carbide-motion.flatpakref
+          touch site/.nojekyll
+          cat > site/index.html <<EOF
+          <!doctype html><meta charset="utf-8"><title>Carbide Motion Flatpak</title>
+          <h1>Carbide Motion Flatpak (unofficial)</h1>
+          <p>Packaged build: ${{ needs.check.outputs.version }}</p>
+          <pre>flatpak install --user ${BASE}/carbide-motion.flatpakref</pre>
+          <p>See <a href="https://github.com/${GITHUB_REPOSITORY}">the repository</a> for details.</p>
+          EOF
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          TAG="carbide-motion-${VERSION}"
+          FILE="CarbideMotion-${VERSION}.flatpak"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$FILE" --clobber
+          else
+            gh release create "$TAG" "$FILE" --target "${{ needs.check.outputs.sha }}" \
+              --title "Carbide Motion ${VERSION}" \
+              --notes "Flatpak wrapper for Carbide Motion build ${VERSION} (Windows build under Wine). The installer itself is downloaded from carbide3d.com at install time."
+          fi
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

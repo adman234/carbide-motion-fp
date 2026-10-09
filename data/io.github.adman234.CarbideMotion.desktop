@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Carbide Motion
+GenericName=CNC Machine Control
+Comment=Carbide 3D machine control software (Windows build via Wine)
+Exec=carbide-motion
+Icon=io.github.adman234.CarbideMotion
+Terminal=false
+Categories=Engineering;
+Keywords=CNC;Shapeoko;Nomad;GRBL;gcode;
+StartupWMClass=carbidemotion.exe

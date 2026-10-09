@@ -1,0 +1,98 @@
+# Flatpak wrapper that runs the official Windows build of Carbide Motion
+# under Wine.
+#
+# The Carbide Motion installer is NOT redistributed: it is declared as
+# `extra-data`, so each user's flatpak downloads it straight from
+# carbide3d.com at install/update time and verifies the pinned sha256.
+#
+# The `x-carbide-motion-*` values and the extra-data url/sha256/size below
+# are rewritten automatically by scripts/check_update.py (run daily by
+# .github/workflows/flatpak.yml) whenever Carbide 3D publishes a new build.
+app-id: io.github.adman234.CarbideMotion
+runtime: org.freedesktop.Platform
+runtime-version: &runtime-version '24.08'
+sdk: org.freedesktop.Sdk
+base: org.winehq.Wine
+base-version: stable-24.08
+command: carbide-motion
+
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=x11
+  - --socket=pulseaudio
+  - --device=all            # /dev/ttyACM* / ttyUSB* for the CNC controller + GPU
+  - --allow=multiarch
+  - --filesystem=xdg-documents
+  - --filesystem=xdg-download
+  - --filesystem=xdg-desktop
+  - --env=WINEDEBUG=-all
+  - --env=WINEDLLOVERRIDES=mscoree,mshtml=;winemenubuilder.exe=d
+
+inherit-extensions:
+  - org.freedesktop.Platform.ffmpeg-full
+  - org.freedesktop.Platform.ffmpeg_full.i386
+  - org.winehq.Wine.gecko
+  - org.winehq.Wine.mono
+  - org.winehq.Wine.DLLs
+
+add-extensions:
+  org.freedesktop.Platform.Compat.i386:
+    directory: lib/i386-linux-gnu
+    version: *runtime-version
+
+  org.freedesktop.Platform.Compat.i386.Debug:
+    directory: lib/debug/lib/i386-linux-gnu
+    version: *runtime-version
+    no-autodownload: true
+
+  org.freedesktop.Platform.GL32:
+    directory: lib/i386-linux-gnu/GL
+    version: '1.4'
+    versions: 24.08;1.4
+    subdirectories: true
+    no-autodownload: true
+    autodelete: false
+    add-ld-path: lib
+    merge-dirs: vulkan/icd.d;glvnd/egl_vendor.d;OpenCL/vendors;lib/dri;lib/d3d;vulkan/explicit_layer.d;vulkan/implicit_layer.d
+    download-if: active-gl-driver
+    enable-if: active-gl-driver
+
+sdk-extensions:
+  - org.freedesktop.Sdk.Compat.i386
+  - org.freedesktop.Sdk.Extension.toolchain-i386
+
+modules:
+  - name: carbide-motion
+    buildsystem: simple
+    build-options:
+      env:
+        # --- managed by scripts/check_update.py ---
+        CM_VERSION: '0'
+        # --- end managed ---
+    build-commands:
+      - install -Dm755 carbide-motion.sh /app/bin/carbide-motion
+      - install -Dm755 apply_extra.sh /app/bin/apply_extra
+      - install -Dm644 ${FLATPAK_ID}.desktop /app/share/applications/${FLATPAK_ID}.desktop
+      - install -Dm644 ${FLATPAK_ID}.metainfo.xml /app/share/metainfo/${FLATPAK_ID}.metainfo.xml
+      - install -Dm644 ${FLATPAK_ID}.svg /app/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
+      - install -Dm644 /dev/null /app/share/carbide-motion/version
+      - echo "${CM_VERSION}" > /app/share/carbide-motion/version
+    sources:
+      - type: file
+        path: scripts/carbide-motion.sh
+      - type: file
+        path: scripts/apply_extra.sh
+      - type: file
+        path: data/io.github.adman234.CarbideMotion.desktop
+      - type: file
+        path: data/io.github.adman234.CarbideMotion.metainfo.xml
+      - type: file
+        path: data/io.github.adman234.CarbideMotion.svg
+      # --- managed by scripts/check_update.py ---
+      - type: extra-data
+        filename: CarbideMotionSetup.exe
+        url: https://carbide3d.com/PLACEHOLDER/CarbideMotion-0.exe
+        sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+        size: 1
+      # --- end managed ---

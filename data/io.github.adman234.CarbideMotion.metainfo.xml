@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.adman234.CarbideMotion</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <name>Carbide Motion</name>
+  <summary>Unofficial Linux wrapper for Carbide 3D's machine control software</summary>
+  <description>
+    <p>
+      Runs the official Windows build of Carbide Motion under Wine.
+      The installer is downloaded directly from carbide3d.com when the
+      flatpak is installed or updated; it is not redistributed.
+    </p>
+    <p>
+      This package is not affiliated with or supported by Carbide 3D.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.adman234.CarbideMotion.desktop</launchable>
+  <url type="homepage">https://github.com/adman234/carbide-motion-fp</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <!-- managed by scripts/check_update.py -->
+  </releases>
+</component>
